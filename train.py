@@ -29,9 +29,11 @@ test_dir = data_dir + '/test'
 # Set up parameters for entry in command line
 parser = argparse.ArgumentParser()
 parser.add_argument('-d','--data_dir', type=str, help='Location of directory with data for image classifier to train and test')
-parser.add_argument('-a','--arch',action='store',type=str, help='Choose pre-trained torch model to use for transfer learning')
+parser.add_argument('-a','--arch',action='store',type=str, help='Choose either Resnet152, VGG19, or VGG16 pre-trained torch models to use for transfer learning')
 parser.add_argument('-l','--load_path',action='store',type=str, help='Select the name of the load_path')
 parser.add_argument('-o','--output_features',action='store',type=int, help='Select number of output features for the last layer')
+parser.add_argument('-i','--input_size',action='store',type=int, help='Select classifier input size')
+parser.add_argument('-h','--hidden_size',action='store',type=int, help='Select classifier hidden size of classifier layers via a list')
 parser.add_argument('-lr','--learning_rate',action='store',type=float, help='Choose a float number as the learning rate for the model')
 parser.add_argument('-e','--epochs',action='store',type=int, help='Choose the number of epochs you want to perform gradient descent')
 parser.add_argument('-s','--save_path',action='store', type=str, help='Select name of file to save the trained model')
@@ -63,7 +65,12 @@ else: load_path = load_path
 if args.data_dir: data_dir = args.data_dir
 else: data_dir = data_dir
 
-    
+if args.input_size: input_size = args.input_size
+else: input_size = input_size
+
+if args.hidden_size: hidden_size = args.hidden_size
+else: hidden_size = hidden_size
+ 
 # ------------------------------
 #Define normalization for images
 mean = (0.485, 0.456, 0.406)
@@ -111,20 +118,38 @@ dataloaders = {'train': (torch.utils.data.DataLoader(train_dataset, batch_size=b
 
 # ---------------------------------
 # Creates model for transfer learning
-def create_model(arch, output_features=output_features):
+def create_pretrained_model(arch, output_features=output_features):
 
-    model_full = models.resnet152(pretrained=True)
+  if arch=='resnet152':
+        model_full = models.resnet152(pretrained=True)
+    elif arch=='vgg19':
+        model_full = models.vgg19(pretrained=True)
+    elif arch=='vgg16':
+        model_full=models.vgg16(pretrained=True)
+    else: print('Please pick from resnet152, vgg19, or vgg16 architectures')
+        
     model_full = model_full.cuda()
-    model_full.fc.out_features = output_features
 
     for param in model_full.parameters():
         param.requires_grad=False
-    
-    for param in model_full.fc.parameters():
-        param.requires_grad=True
-      
-    return model_full
 
+      
+    return pre_trained_model
+
+#------------------------------------
+def define_classifier(input_size, hidden_sizes, output_features):
+    # TODO: Make it configurable based on the hidden_sizes list size
+    pre_trained_model = create_model(arch, output_features=output_features))
+    nn.Sequential(pre_trained_model)
+    nn.Sequential(OrderedDict([
+            ('fc1', nn.Linear(input_size, hidden_sizes[0])),
+            ('relu1', nn.ReLU()),
+            ('drop1', nn.Dropout(p=0.2)),
+            ('fc2', nn.Linear(hidden_sizes[0], hidden_sizes[1])),
+            ('relu2', nn.ReLU()),
+            ('fc3', nn.Linear(hidden_sizes[1], output_features))]))
+    
+    return model_full
 
 #-------------------------------------
 #Creates Training Loop
