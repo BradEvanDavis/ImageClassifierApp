@@ -1,39 +1,40 @@
 # Imports here
 import matplotlib.pyplot as plt
 import torch
-import torchvision
 from torchvision import datasets, transforms, models
 import numpy as np
 from glob import glob
 import torch.nn as nn
 import argparse
+from collections import OrderedDict
+import json
 
 # ---------------------------
 # Initiate variables with default values
-checkpoint = 'checkpoint.pth'  
 arch='resnet152'
+checkpoint = 'checkpoint_{}.pth'.format(arch)  
 image_path = 'flowers/test/100/image_07896.jpg'
 
 # Set up parameters for entry in command line
+hidden_size = 1024
 output_features = 102
 learning_rate = 0.001
 epochs = 10
-save_path = 'checkpoint.pth'
-load_path = 'checkpoint.pth'
+gpu=True
+save_path = checkpoint
+load_path = None
 data_dir = 'flowers'
 train_dir = data_dir + '/train'
 valid_dir = data_dir + '/valid'
 test_dir = data_dir + '/test'
 
-
 # Set up parameters for entry in command line
 parser = argparse.ArgumentParser()
 parser.add_argument('-d','--data_dir', type=str, help='Location of directory with data for image classifier to train and test')
-parser.add_argument('-a','--arch',action='store',type=str, help='Choose either Resnet152, VGG19, or VGG16 pre-trained torch models to use for transfer learning')
+parser.add_argument('-a','--arch',action='store',type=str, help='Choose either resnet152, vgg19, or vgg16 pre-trained torch models to use for transfer learning')
 parser.add_argument('-l','--load_path',action='store',type=str, help='Select the name of the load_path')
 parser.add_argument('-o','--output_features',action='store',type=int, help='Select number of output features for the last layer')
-parser.add_argument('-i','--input_size',action='store',type=int, help='Select classifier input size')
-parser.add_argument('-h','--hidden_size',action='store',type=int, help='Select classifier hidden size of classifier layers via a list')
+parser.add_argument('-hs','--hidden_size',action='store',type=int, help='Select classifier hidden size of classifier layers via a list')
 parser.add_argument('-lr','--learning_rate',action='store',type=float, help='Choose a float number as the learning rate for the model')
 parser.add_argument('-e','--epochs',action='store',type=int, help='Choose the number of epochs you want to perform gradient descent')
 parser.add_argument('-s','--save_path',action='store', type=str, help='Select name of file to save the trained model')
@@ -65,9 +66,6 @@ else: load_path = load_path
 if args.data_dir: data_dir = args.data_dir
 else: data_dir = data_dir
 
-if args.input_size: input_size = args.input_size
-else: input_size = input_size
-
 if args.hidden_size: hidden_size = args.hidden_size
 else: hidden_size = hidden_size
  
@@ -93,11 +91,10 @@ data_transforms = {'train':(transforms.Compose([transforms.Resize(256),
     transforms.RandomCrop(224),
     transforms.ToTensor(),
     transforms.Normalize(mean=mean, std=std)]))}
+#-------------------------------------------------
 
-# In[6]:
-import json
-with open('cat_to_name.json', 'r') as f:
-    cat_to_name = json.load(f)
+with open('cat_to_name.json', 'r') as cats:
+    cat_to_name = json.load(cats)
 
 batch_size = 64
 num_workers = 0
@@ -118,61 +115,108 @@ dataloaders = {'train': (torch.utils.data.DataLoader(train_dataset, batch_size=b
 
 # ---------------------------------
 # Creates model for transfer learning
-def create_pretrained_model(arch, output_features=output_features):
+def create_pretrained_model(arch=arch):
 
-  if arch=='resnet152':
+    if arch=='resnet152': 
         model_full = models.resnet152(pretrained=True)
-    elif arch=='vgg19':
+        for param in model_full.parameters(): param.requires_grad=False
+        for param in model_full.fc.parameters(): param.requires_grad=True
+    elif arch=='vgg19': 
         model_full = models.vgg19(pretrained=True)
+        for param in model_full.parameters(): param.requires_grad=False
+        for param in model_full.classifier.parameters(): param.requires_grad=True
     elif arch=='vgg16':
-        model_full=models.vgg16(pretrained=True)
+        model_full = models.vgg16(pretrained=True)
+        for param in model_full.parameters(): param.requires_grad=False
+        for param in model_full.classifier.parameters(): param.requires_grad=True
     else: print('Please pick from resnet152, vgg19, or vgg16 architectures')
-        
-    model_full = model_full.cuda()
 
-    for param in model_full.parameters():
-        param.requires_grad=False
-
-      
-    return pre_trained_model
-
-#------------------------------------
-def define_classifier(input_size, hidden_sizes, output_features):
-    # TODO: Make it configurable based on the hidden_sizes list size
-    pre_trained_model = create_model(arch, output_features=output_features))
-    nn.Sequential(pre_trained_model)
-    nn.Sequential(OrderedDict([
-            ('fc1', nn.Linear(input_size, hidden_sizes[0])),
-            ('relu1', nn.ReLU()),
-            ('drop1', nn.Dropout(p=0.2)),
-            ('fc2', nn.Linear(hidden_sizes[0], hidden_sizes[1])),
-            ('relu2', nn.ReLU()),
-            ('fc3', nn.Linear(hidden_sizes[1], output_features))]))
+    if gpu: model_full.cuda()
     
     return model_full
 
+#------------------------------------
+def create_model(arch=arch, hidden_size=hidden_size, output_features=output_features):
+    
+    pretrained_model = create_pretrained_model(arch)
+    
+    if arch=='resnet152': 
+        input_features = pretrained_model.fc.in_features
+    else: 
+        input_features = pretrained_model.classifier[0].in_features
+    
+    classifier = nn.Sequential(OrderedDict([
+        ('fc1', nn.Linear(input_features, hidden_size)),
+        ('relu1', nn.ReLU()),
+        ('fc2', nn.Linear(hidden_size, output_features))
+        ]))
+    
+    if arch=='resnet152': 
+        pretrained_model.fc = classifier
+    else: 
+        pretrained_model.classifier = classifier
+    if gpu: pretrained_model.cuda()
+    
+    return pretrained_model
 #-------------------------------------
+
+#Save Checkpoint
+def save_checkpoint(model, epoch, save_path=save_path, arch=arch):
+    
+    model.class_to_idx = train_dataset.class_to_idx
+    if arch=='resnet152':
+        checkpointRes = {'input_size': model.fc[0].in_features,
+            'output_size': model.fc[-1].out_features,
+            'hidden_size': hidden_size,
+            'batch_size': batch_size,
+            'learning_rate': optimizer.param_groups[-1]['lr'],
+            'model_name': 'ImageClassifier',
+            'state_dict': model.state_dict(),
+            'optimizer': optimizer.state_dict(),
+            'epoch': epoch,
+            'class_to_idx': model.class_to_idx}
+        torch.save(checkpointRes, save_path)
+    
+    else:
+        checkpointVGG = {'input_size': model.classifier[0].in_features,
+            'output_size': model.classifier[-1].out_features,
+            'hidden_size': hidden_size,
+            'batch_size': batch_size,
+            'learning_rate': optimizer.param_groups[-1]['lr'],
+            'model_name': 'ImageClassifier',
+            'state_dict': model.state_dict(),
+            'optimizer': optimizer.state_dict(),
+            'epoch': epoch,
+            'class_to_idx': model.class_to_idx}
+        torch.save(checkpointVGG, save_path)
+
+#------------------------------------
 #Creates Training Loop
-def train(n_epochs, loaders, model, optimizer, criterion, save_path, load_path):
+
+def train(n_epochs, loaders, model, optimizer, criterion, save_path, load_path, gpu):
     '''
     Returns trained model and saves weights
     '''
     use_cuda = torch.cuda.is_available()
+    if gpu or use_cuda:
+        gpu=True
+    
     valid_loss_min = np.inf
+    if load_path != None:
+         checkpoint=torch.load(load_path)
+        
     for epoch in range(1, n_epochs+1):
         #Initializing variables to monitor training and validation
         train_loss=0.0
         valid_loss=0.0
         accuracy=0.0
-
+        
         #Load model with latest decrease in validation loss or for 1st epoch load specified data in function
-        if load_path != None and epoch == 1:
-            model.load_state_dict(torch.load(load_path))
-            model = model.cuda()
-        #elif epoch > 1:
-         #   model.load_state_dict(torch.load(save_path))
-          #  model = model.cuda()
-                
+        if load_path != None:
+            epoch = checkpoint['epoch']+epoch
+            model.load_state_dict(checkpoint['state_dict'])
+            optimizer.load_state_dict(checkpoint['optimizer'])
+              
         #Model Training
         model.train()
         print('Starting Training')
@@ -189,7 +233,7 @@ def train(n_epochs, loaders, model, optimizer, criterion, save_path, load_path):
             train_loss = train_loss + ((1/ (batch_idx+1)) * (loss.data - train_loss))
            
             #accuracy
-            ps = torch.exp(output)
+            ps = torch.nn.functional.softmax(output, dim=1)
             top_p, top_class = ps.topk(1,dim=1)
             equals = top_class == target.view(*top_class.shape)
             accuracy += torch.mean(equals.type(torch.cuda.FloatTensor)).item()
@@ -211,10 +255,10 @@ def train(n_epochs, loaders, model, optimizer, criterion, save_path, load_path):
         # print training/validation statistics.  Model only saves when validation loss decreases vs prev run 
         if epoch == 1:
             valid_loss_min = valid_loss
-            torch.save(model.state_dict(), save_path)
+            save_checkpoint(model, save_path=save_path, epoch=epoch)
                 
         elif valid_loss < valid_loss_min and epoch > 1:
-            torch.save(model.state_dict(), save_path)
+            save_checkpoint(model, save_path='checkpoint.pth',epoch=epoch)
             print('Validation Loss Decreased ({:.6f} --> {:.6f}).  Model Saved...'.format(
                 valid_loss_min,
                 valid_loss))
@@ -235,11 +279,15 @@ def train(n_epochs, loaders, model, optimizer, criterion, save_path, load_path):
 
 # --------------------------------------------
 # validation on the test set
-def test_validation(model, dataloaders, criterion, load_path):
+def test_validation(model, dataloaders, criterion, load_path='checkpoint.pth'):
+    
     use_cuda = torch.cuda.is_available()
-    model.load_state_dict(torch.load(load_path))
-    model = model.cuda()
+    
+    model.eval()    
+    checkpoint=torch.load(load_path)
+    model.load_state_dict(checkpoint['state_dict'])
     model.eval()
+   
     test_loss = 0
     test_accuracy = 0
     total = 0
@@ -261,15 +309,20 @@ def test_validation(model, dataloaders, criterion, load_path):
         test_accuracy = (100. * correct / total)
             
     return print('Loss: %.2f, Accuracy: %.1f' % (test_loss, test_accuracy))
-
-
 #------------------------------------
 # Runs Appropriate Functions
-model = create_model(arch, output_features)
+pretrained_model = create_pretrained_model(arch)
+model = create_model()
+
+if arch == 'resnet152': 
+    fc_params = model.fc.parameters()
+else: 
+    fc_params = model.classifier.parameters()
+
 criterion = nn.CrossEntropyLoss()
-optimizer = (torch.optim.Adam(model.fc.parameters(), lr=learning_rate, amsgrad=True))
-train(epochs, dataloaders, model, optimizer, criterion, save_path, load_path)
-test_validation(model, dataloaders, nn.CrossEntropyLoss(), load_path)
+optimizer = (torch.optim.Adam(fc_params, lr=learning_rate, amsgrad=True))
+train(epochs, dataloaders, model, optimizer, criterion, save_path, load_path, gpu)
+test_validation(model, dataloaders, criterion, checkpoint)
 
 print('-' * 10)
 print('Your model has been successfully trained and saved.')
