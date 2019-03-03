@@ -11,7 +11,7 @@ import json
 
 # ---------------------------
 # Initiate variables with default values
-arch='resnet152'
+arch='vgg19'
 checkpoint = 'checkpoint_{}.pth'.format(arch)  
 image_path = 'flowers/test/100/image_07896.jpg'
 
@@ -279,13 +279,11 @@ def train(n_epochs, loaders, model, optimizer, criterion, save_path, load_path, 
 
 # --------------------------------------------
 # validation on the test set
-def test_validation(model, dataloaders, criterion, load_path='checkpoint.pth'):
+def test_validation(model, dataloaders, checkpoint=checkpoint):
     
-    use_cuda = torch.cuda.is_available()
-    
-    model.eval()    
-    checkpoint=torch.load(load_path)
+    checkpoint=torch.load(checkpoint)
     model.load_state_dict(checkpoint['state_dict'])
+    optimizer.load_state_dict(checkpoint['optimizer'])
     model.eval()
    
     test_loss = 0
@@ -322,7 +320,7 @@ else:
 criterion = nn.CrossEntropyLoss()
 optimizer = (torch.optim.Adam(fc_params, lr=learning_rate, amsgrad=True))
 train(epochs, dataloaders, model, optimizer, criterion, save_path, load_path, gpu)
-test_validation(model, dataloaders, criterion, checkpoint)
+test_validation(model, dataloaders, checkpoint)
 
 print('-' * 10)
 print('Your model has been successfully trained and saved.')

@@ -14,7 +14,7 @@ from IPython.display import display
 
 # ---------------------------
 # Initiate variables with default values
-arch='resnet152'
+arch='vgg19'
 checkpoint = 'checkpoint_{}.pth'.format(arch)  
 img_path = 'flowers/test/100/image_07896.jpg'
 device=torch.device("cuda" if torch.cuda.is_available() else "cpu")
